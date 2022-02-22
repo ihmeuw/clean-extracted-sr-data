@@ -1,0 +1,192 @@
+---
+title: "Prep example dataset for extraction cleaning demo"
+author: "zimsen at uw dot edu"
+date: "February 2022"
+output: html_document
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+rstudioapi::writeRStudioPreference("data_viewer_max_columns", 150L)
+```
+
+```{r load-pkgs, message=FALSE, warning=FALSE}
+# Base-R package loading: 
+#   load from `packages` list if installed; if not, install & then load
+packages <- c("openxlsx", "tools", "tidyverse", "writexl")
+
+sapply(packages, function(x) {
+    require(x, character.only = TRUE) || {
+        install.packages(x, dependencies = TRUE);
+        library(x, character.only = TRUE)
+    }
+  }
+)
+
+# TODO avoid warning: update R XOR revert openxlsx to 4.2.4 (R4.1.1-compatible)
+```
+
+## What is this for?
+
+<!-- # TODO ... edit & explain ... -->
+
+My institute has a policy to not share unpublished, internal, pre-database-upload datasets externally.
+
+for effective demo that works with our code w/o much refactor work, need dataset similar to our SR output of extracted data
+
+Need publicly available SR data on disease incidence rates, with info on sources (studies), locations, dates, demographics, case definition & diagnostics.
+
+This code gets example datasets, selects columns, and merges them into a final example dataset.
+
+## Get datasets
+
+The Infectious Diseases Data Observatory (IDDO) at the University of Oxford "encourages and facilitates collaborative data sharing practices" [<https://www.iddo.org/schistosomiasissths/benefits-data-sharing>], offering several systematic-review datasets on their Tools for Researchers page [<https://www.iddo.org/tools-researchers>]. These tools include SR datasets on two diseases my team also systematically reviews: soil-transmitted helminth infections (STH) and schistosomiasis [<https://www.iddo.org/schistosomiasissths/research/systematic-review-datasets>]. I use their STH data as an example, since they are formatted more like our standard output. However, they extracted data for much wider analyses than we do, and they split data that we extract at once into more than one spreadsheet. So to create an example dataset most similar to our SR output, I read in two of their datasets, selected a subset of fields from each, and merged the two into one example dataset.
+
+I use this dataset to demonstrate my semi-automated checklist for cleanup of extracted datasets.
+
+IDDO publishes a dictionary of variables alongside the STH datasets -- an extremely useful best practice. I used it to decide which of their columns to keep to build the most relevant example dataset. [<https://www.iddo.org/document/soil-transmitted-helminthiases-systematic-review-variable-dictionary>]
+
+<!-- # TODO look for data fields with holes already -->
+
+<!-- # TODO treat the semi-free text dx fields as full of typos -- see if you can clean that to be constrained-vocabulary factors -->
+
+<!-- # TODO use start year as bad limited list! -->
+
+```{r fetch-datasets}
+# IDDO URL root for file downloads
+#   (not a standalone public URL)
+#   (keep URL's trailing `/` in alias, for concatenation with filename)
+base_url <- "https://www.iddo.org/sites/default/files/publication/2021-12/"
+
+
+# Soil-transmitted helminthiases systematic review -
+#   study and cohort-level data
+cohort_file <- paste0(base_url, 
+                     "STHs%20study%20and%20cohort%20level%20data%202017.xlsx")
+
+cohort_data_all <- read.xlsx(cohort_file,
+                             sheet = "by-cohort data",
+                             skipEmptyRows = FALSE,
+                             rows = 3:310,
+                             na.strings = c("NA", "N/A", ""))
+
+# Repair any colnames starting with `#` -- a somewhat special character
+colnames(cohort_data_all) <- gsub("#", 
+                                  "note_", 
+                                  fixed = TRUE, # handle `#` correctly
+                                  colnames(cohort_data_all)) 
+
+
+# Soil-transmitted helminthiases systematic review - 
+#   study arm-level data
+trt_file <- paste0(base_url, 
+                   "STHs%20arm-level%20data%202017.xlsx")
+
+treatmnt_data_all <- read.xlsx(trt_file,
+                               sheet = "5 and 6.Per-arm details",
+                               skipEmptyRows = FALSE,
+                               rows = 3:450,
+                               na.strings = c("NA", "N/A"))
+
+# Repair any colnames starting with `#`  -- a somewhat special character
+colnames(treatmnt_data_all) <- gsub("#", 
+                                    "note_", 
+                                    fixed = TRUE, # handle `#` correctly
+                                    colnames(treatmnt_data_all))
+```
+
+## Drop unneeded variables
+
+Keep columns similar to our extraction scheme; keep ID columns needed to merge between datasets; end up with a realistic but manageable set of fields.
+
+Starting with N(cohort) = 102 & N(trt) = 50 variables, end with 22 & 9 fields, respectively. Selection commands will have to be tedious lists of column names.
+
+```{r select-vars}
+cohort_data    <- cohort_data_all %>% 
+    # keep merge-IDs and source citations
+    select(starts_with(c("X0", "X_")),
+    # keep specific info on setting, outcomes, participants
+           starts_with(c("B0_c", "note_site", "B1", "B2", "B3")), 
+           ends_with(c("_base", "Tech1", "helminth")),
+           starts_with(c("F0", "F3")))
+
+treatmnt_data <- treatmnt_data_all %>% 
+    # keep merge-IDs and source citations
+    select(starts_with(c("X0", "X_")), 
+    # keep specific info on participants
+           starts_with(c("J0", "J1_f", "J2_effi", "note_co", "note_arm")))
+
+rm(cohort_data_all, treatmnt_data_all)
+```
+
+## Prep additional details
+
+<!-- # TODO: EDIT! *** Make IDDO-STH participant data more human-readable for example dataset -->
+
+```{r prep-details}
+# Make IDDO-STH participant data more human-readable in example dataset
+treatmnt_data <- treatmnt_data %>% 
+    # human-readable field-name
+    rename(trt_fxv = J2_efficacy_n) %>% 
+    # replance NAs in primary sample-size column with next-most reliable number
+    mutate(participants = coalesce(J0_treated, J0_assigned, J1_followed_60,
+                                  J0_examined_wholeStudy),
+           .keep = "unused") %>% 
+    # construct "notes" field 
+    unite("notes_trt", c(note_cohort, note_armNotes),
+          sep = "; ", na.rm = TRUE)
+
+# Make participant counts into integers
+treatmnt_data$trt_fxv      <- as.integer(treatmnt_data$trt_fxv) 
+treatmnt_data$participants <- as.integer(treatmnt_data$participants)
+```
+
+Note that the primary quantitative data in our test dataset is prevalence, or cases per sample population, as `cases` and `sample_size`. I am not renaming these example fields to match, because I do not know how these example data will be used in the future, and I do not want to release into the wild any incorrect but plausible numbers -- especially not if they are backed by the apparent credibility of a legitimate systematic review. I use `trt_fxv` (for "treated effectively") and `participants` to try to convey the content of the two fields: numbers of participants effectively treated and total number of participants.
+
+## Merge study and subject data
+
+Merge "study arm-level data" containing participant-level treatment details with "cohort data" containing study-level info. Use the unique identifiers for study ID `X_ID` and cohort within a study `X_cohort`. Keep all rows of treatment data.
+
+### Leave datasets "messy"
+
+Keep "messy" features like blank rows, NAs, ineligible sources, etc., to leave material for the demo extraction clean-up to work on.
+
+Completely blank rows, however, merge with all the other completely blank rows, forming a Cartesian join of 130 x 129 = 16,770 blank rows interspersed with the 311 non-blank rows. I solve this problem with a temporary value in one of the merge-key (matching) variables. I used the nearest non-blank study ID value for each blank row, to preserve the spacing of blank rows between studies, just as in our own data extractions -- then restored the null values after the merge.
+
+```{r merge-data}
+# Add non-null value to blank cells in one key variable 
+#   so empty rows can match on something, avoiding cartesian join of blank rows
+cohort_data   <- cohort_data   %>% fill(X_ID, .direction = "up")
+treatmnt_data <- treatmnt_data %>% fill(X_ID, .direction = "up")
+
+sth_example_data <- right_join(cohort_data, treatmnt_data, 
+                               by = c("X_ID", "X_cohort", "X0_authors",
+                                      "X0_pubYear", "X0_pubTitle"))
+
+# Restore original NAs to the modified matching variable
+sth_example_data <- sth_example_data %>% 
+    mutate(X_ID = replace(X_ID, is.na(X_cohort), NA))
+
+# Clean up the merged dataset:
+# Move cohort treatment level ID "X_arm" next to the other unique-key components
+# Drop blank row immediately after the header, so later read-in works smoothly
+sth_example_data <- sth_example_data %>% 
+    relocate(X_arm, .after = X_cohort) %>% 
+    slice(-1)
+```
+
+<!-- TODO ## Format Datasets  -->
+<!-- TODO ... use `openxlsx` tools to add Excel formatting, validation, frozen panes, etc. (maybe even add a pesky dictionary-row! like ours) to match original IDDO `.xlsx` datasets, similar to our own extracted datasets -->
+
+## Save as `.xlsx` file
+
+Produce an `.xlsx` file of the merged dataset, so the output is similar to the unpublished test dataset. Usefully name the single new worksheet tab.
+
+```{r save-output}
+write_xlsx(setNames(list(sth_example_data), "sth_example"), 
+           "sth_iddo_extraction_example_dataset.xlsx")
+```
+
+The resulting saved `.xlsx` file is located in the same folder as this `prep_dataset.Rmd` file is stored. This file has `r nrow(sth_example_data)` rows of `r ncol(sth_example_data)` column variables, retaining "messy" features such as blank rows, duplicates (?), or disallowed text values (some of which indicates rows that are to be dropped from analysis). This example file is now ready to use as input to the demonstration of our dataset-cleaning R-markdown notebook. The notebook streamlines the tidying of datasets extracted from scientific articles, prior to upload to research database and subsequent analysis and modeling.
+
+##### end

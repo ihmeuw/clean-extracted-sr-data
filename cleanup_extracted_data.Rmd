@@ -1,0 +1,230 @@
+---
+title: "Extraction Clean-up"
+author: Steph Zimsen
+date: February 2022
+output: 
+  html_notebook: 
+    toc: yes
+---
+
+```{r setup, include = FALSE, }
+knitr::opts_chunk$set(echo = TRUE)
+rstudioapi::writeRStudioPreference("data_viewer_max_columns", 150L)
+```
+
+```{r load-pkgs}
+# Load packages easily in only base-R:
+#   load from `packages` list if installed; if not, install & then load
+packages <- c("tools", "tidyverse", "readxl", "writexl")
+
+sapply(packages, function(x) {
+    require(x, character.only = TRUE) || {
+        install.packages(x, dependencies = TRUE);
+        library(x, character.only = TRUE)
+    }
+  }
+)
+```
+
+## What is it for?
+
+This interactive notebook cleans and validates datasets extracted from scientific literature during systematic reviews, as prep for upload to a research database.
+
+It removes blank rows, then checks for missingness, for duplicated observations (rows), and for valid values in specific fields (columns).
+
+Required inputs are: a **filepath to a dataset** to be cleaned up, and **three sets of column names**: to check for **null values**; to form keys to check for **uniqueness**; and to test for **valid entries**. The last set also needs **logical tests** for each field
+
+Outputs will be a report of rows that failed their validation checks. The saved report will be named based on the filename of the input dataset and saved in the same folder as that dataset.
+
+User input is entered in the next section. Later sections define functions to check for nulls, dups, and disallowed values; collect the results of these checks; and print the results to a report file. (Required packages were sourced and loaded during setup.)
+
+## User input
+
+Think of this section as a form to fill in.\
+<!--# TODO: parameterize with Shiny GUI -->\
+<!--# [bookdown 15.3](https://bookdown.org/yihui/rmarkdown/params-knit.html#the-interactive-user-interface) -->
+
+### Enter filepath and name
+
+What is the filename of your dataset to be cleaned? *Enter it between the quotation marks. Include the file extension (`.csv` or `.xlsx` or similar) (replace `dataset_filename.ext`)*
+
+```{r input-file-name}
+input_filename <- "dataset_filename.ext"
+# input_filename <- "sth_iddo_extraction_example_dataset.xlsx"
+
+# TODO add check for valid file extension with `tools::file_ext()` 
+# TODO add error message; add fix-it step
+```
+
+What is the folder containing your dataset to be cleaned? *Enter it between the quotation marks (replace `A:/full/filepath/to/the/dataset`).*
+
+```{r input-path, eval=FALSE, include=FALSE}
+input_path <- "A:/full/filepath/to/the/dataset"
+
+# TODO get the "here" pkg!
+```
+
+Check that the full filepath is correct: `\r file.path(input_path, input_filename)`
+
+If not, go back to *correct the errors, and run the code chunk(s) again.*\
+If it is correct, continue: run the next two code chunks -- *no new input is needed.*
+
+The next code chunk will read in your dataset based on your input above.
+
+```{r input-file, eval=FALSE, include=FALSE}
+dataset <- read_excel(file.path(input_path, input_filename))
+
+# TODO check that `file.path` handles sep = `/` with|w/o path-trailing `/`
+```
+
+Your input file was read in from `\r file.path(input_path, input_filename)`.
+
+### Specify fields to check for missingness
+
+This check is to identify "holes" in the dataset where you expect or require valid values, but have no data.
+
+Inputs are the dataset you are cleaning, the definition of missing values, and the vector of column names that you want to check for missing values.
+
+Results for each variable will be a table of rows flagged as having an unexpected missing value. The table(s) will be sent to a report that will be saved as final output.\
+<!--# TODO refactor the output to be more readable -->
+
+#### Define what counts as "missing"
+
+The default "missing" values are `NA`, `null`, and "" (blank cells). *Add any additional values required, or remove unneeded values, leaving an "OR" line between each pair of logical definitions of the "x" value.*
+
+<!--# TODO does it have to be a function? maybe list of criteria? -->
+
+```{r define-missing}
+whats_missing <- function(x){
+  is.na(x) | is.null(x) | x == "" | x == 9999
+}
+
+# TODO pull helper function here out of `check_missing` function
+```
+
+#### List which columns to check
+
+Column names to be checked for any missing values must be typed exactly as they are given in the input dataset. *Enter column names between quotation marks, replacing `colname`. Add terms separated by commas; remove unused terms.*
+
+```{r check-for-missing}
+missing_vars <- c("colname", "colname", "colname", "colname", "colname")
+# missing_vars <- c("X_arm", "B0_country", "B2_species", "paticipants")
+```
+
+### Specify elements to check for duplicate rows
+
+Duplicate rows are identified as both having the same unique key. They key is most often constructed from multiple columns. For example, several rows can have data which come from the same source, in the same location, on the same sampling date, but have different ages. If the key consists of columns for source, location, sampling date, and age, then these several rows would all be unique. If the key consists only of source, location, and sampling date, but **not** age, then these same rows would be duplicates of each other.
+
+Inputs are a vector of column names that you want to check for missing values.
+
+Results will be a list of rows flagged as having a duplicate set of variables which you expect to be unique. This list will be sent to a report that will be saved as final output.
+
+Decide which columns contribute to the uniqueness of the row, and *enter column names between quotation marks, replacing `colname`. Add terms separated by commas; remove unused terms.*
+
+```{r check-dups}
+uniq_by_vars <- c("colname", "colname", "colname", "colname", "colname")
+#uniq_by_vars <- c("X0_authors","X0_pubYear","X0_pubJournal", 
+#                  "X_ID", "X_cohort","X_arm")
+
+# TODO ?add option to declare dup where one row has null & other doesn't?
+```
+
+### Specify fields and criteria to check for valid values
+
+Each column you want to validate needs a logical criterion, or a set of logical criteria, delineating an acceptable value. This can be a data type such as integer, or a range of numbers, or a list of items from a constrained vocabulary such as specific levels or factors in a categorical variable.
+
+(Blanks, NAs, nulls, NANs, and possibly other indicators of empty cells should have been identified in the missingness check. If you are trying to include these in your logical criteria here, go back and add them to the missingness check and run it again.)
+
+Inputs are sets of a column name and logical criteria to *accept* the value in that column.
+
+Results will be a reports of rows that fail the specified logical test -- each test will have its own report of column name & invalid rows.
+
+For every column you wish to check for valid values, *add the column name, the logical operator, and the allowable (or disallowed) value(s)*
+
+```{r check-oor}
+valid_vars_rules <- c('colname %in% c("value", "value", "value")',
+                      'colname < number',
+                      'is.integer(colname)')
+# valid_vars_rules <- c('X_cohort %in% c("C01", "C02", "C03", "C04", "C05")',
+#                       'F0_ageMin < 19',
+#                       'E3_helminth != 1')
+
+# TODO investigate more direct syntax to collect multiple separate logical comparisons
+```
+
+### End of interactive input
+
+You have provided all the info needed to run the checks you selected. The rest of the code runs the check functions, and writes a report on the result.
+
+### Find the output path & file
+
+This section needs no input, merely informs you where to look for the output report after your checks all run. Just **run this code chunk:**
+
+```{r report-results}
+report_out <- file.path(input_path, paste0("fixit_report_", input_filename))
+```
+
+Find your report of rows with errors at `\r report-out` .
+
+## Run initial cleaning steps
+
+The first cleaning steps do not require user input: delete all rows that are completely blank; then add an index number to each row to assist in reporting where the clean-up checks fail.
+
+**You will still need to run each code chunk which follows.**
+
+### Delete blank rows
+
+```{r delete-blanks}
+dataset <- dataset %>% 
+    filter(across(everything(), !is.na))
+```
+
+### Add row index
+
+```{r index-rows}
+dataset <- dataset %>% 
+    mutate(row_index = c(1:nrow()))
+
+# TODO put the index in front
+```
+
+## Run the check functions
+
+This section sources the check functions from their child scripts, launches them to run on the prepared input data, and collects info on which rows failed which checks, in which variables.
+
+**You will still need to run each code chunk which follows.**
+
+### Source the check functions
+
+```{r source-checks}
+functions <- c("missing_check.R", "duplicate_check.R", 
+               "validate_check.R", "write_outputs.R")
+
+invisible(sapply(paste0(source_dir, functions), source))
+
+# TODO edit `sapply` with new aliases
+# TODO translate `sapply` into dplyr
+```
+
+### Run the check functions
+
+Perform the requested verification checks on the dataset to be cleaned. The functions report error messages in order to collect, format, and report them later.==
+
+```{r run-checks}
+list_of_outputs <- list()
+list_of_outputs[["missing_list"]] <- missing_check(dt, check_args$vars_check)
+list_of_outputs[["duplicate_list"]] <- duplicate_check(dt, check_args$byvars)
+list_of_outputs[["validation_list"]] <- validation_check(dt, check_args$validation_criteria)
+
+# TODO refactor outputs of checks to produce nicer tables of row IDs (use new index) & errors (column name(s); criterion)
+```
+
+## Report on which rows failed checks
+
+<!--# TODO refactor how the results are presented =-->
+
+```{r print-report}
+write_xlsx(report_out)
+```
+
+##### end
